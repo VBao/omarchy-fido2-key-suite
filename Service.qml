@@ -105,6 +105,11 @@ Item {
   property bool fido2PresenceKnown: false
   property bool fido2AbsencePending: false
   property bool fido2Authenticating: false
+  property double fido2ScheduledAt: 0
+  // Once a PAM attempt fails, presence polling must not silently try again.
+  // Only a new lock, an explicit mode/retry action, or resume recovery clears
+  // this latch.
+  property bool fido2RetryBlocked: false
   property bool fido2NeedsPin: false
   property string fido2Status: ""
   property string pendingFido2Pin: ""
@@ -267,8 +272,9 @@ Item {
     logEvent("auth-mode=" + mode)
 
     if (mode === "fido2") {
+      fido2RetryBlocked = false
       refreshFido2Token()
-      startFido2()
+      if (sessionLock.secure) scheduleFido2()
     }
   }
 
@@ -286,6 +292,7 @@ Item {
     authenticatingPassword = false
     fingerprintAuthenticating = false
     fingerprintRetryTimer.stop()
+    fido2RetryBlocked = false
     if (passwordPam.active) passwordPam.abort()
     if (fingerprintPam.active) fingerprintPam.abort()
     abortFido2()
@@ -294,11 +301,49 @@ Item {
   }
 
   function abortFido2() {
+    fido2SettleTimer.stop()
+    fido2ScheduledAt = 0
     fido2Authenticating = false
     fido2NeedsPin = false
     fido2Status = ""
     pendingFido2Pin = ""
     if (fido2Pam.active) fido2Pam.abort()
+  }
+
+  function restartFido2AfterResume() {
+    // pam_u2f can keep a pre-suspend hidraw transaction open after the machine
+    // wakes, but that transaction no longer receives touches. A deliberate
+    // password selection is left alone.
+    if (!lockRequested || !fido2Active) return
+
+    logEvent("resume: restarting-fido2")
+    fido2RetryBlocked = false
+    abortFido2()
+    // Do not race USB re-enumeration. If the presence watcher observes a real
+    // detach/attach, that transition will replace this with its own settle run.
+    scheduleFido2AfterResume()
+  }
+
+  function scheduleFido2() {
+    scheduleFido2WithDelay(2500)
+  }
+
+  function scheduleFido2AfterResume() {
+    scheduleFido2WithDelay(5000)
+  }
+
+  function scheduleFido2WithDelay(delayMs) {
+    if (!lockRequested || !fido2Active || !fido2Configured || fido2RetryBlocked) return
+    if (!fido2TokenPresent) {
+      fido2Status = "No security key detected"
+      return
+    }
+
+    var delay = Math.max(100, Number(delayMs))
+    fido2ScheduledAt = Date.now()
+    fido2Status = "Security key is waking up…"
+    fido2SettleTimer.interval = delay
+    fido2SettleTimer.restart()
   }
 
   function beginLock() {
@@ -417,11 +462,14 @@ Item {
       return
     }
 
+    fido2SettleTimer.stop()
+    fido2ScheduledAt = 0
     runWake()
     fido2NeedsPin = false
     pendingFido2Pin = ""
     fido2Status = "Waiting for your key…"
     fido2Authenticating = true
+    fido2RetryBlocked = false
 
     if (!fido2Pam.start()) {
       fido2Authenticating = false
@@ -481,6 +529,9 @@ Item {
     // Deliberately no auto-retry, unlike the fingerprint flow. Every failed
     // attempt here may have cost one of the key's PIN retries, so restarting
     // is the user's call.
+    fido2SettleTimer.stop()
+    fido2ScheduledAt = 0
+    fido2RetryBlocked = true
     failedAttempts += 1
     failureMessage = "Security key failed (" + failedAttempts + ")"
     fido2Status = ""
@@ -499,7 +550,12 @@ Item {
         sessionLockStabilizeTimer.stop()
         pendingSessionLockTimer.stop()
         root.startFingerprint()
-        root.startFido2()
+        // A lid-triggered lock becomes secure only milliseconds before S3.
+        // Opening pam_u2f here leaves a CTAP transaction suspended mid-touch
+        // and the authenticator remains busy long after resume. Scheduling the
+        // start means normal locks wait briefly, while a sleep lock reaches S3
+        // with no FIDO transaction in flight.
+        root.scheduleFido2()
       }
     }
 
@@ -679,6 +735,29 @@ Item {
     onTriggered: root.refreshFido2Token()
   }
 
+  Timer {
+    id: fido2SettleTimer
+    // Enumeration returns before some authenticators are ready to open a FIDO
+    // transaction after USB resume. Give the device one quiet settling window
+    // instead of hammering it from the two-second presence poll.
+    interval: 2500
+    repeat: false
+    onTriggered: {
+      var now = Date.now()
+      // A timer frozen by suspend arrives late. Treat that as resume rather
+      // than opening a CTAP transaction against a half-resumed authenticator.
+      if (root.fido2ScheduledAt > 0 && now - root.fido2ScheduledAt > interval + 500) {
+        root.restartFido2AfterResume()
+        return
+      }
+
+      root.fido2ScheduledAt = 0
+      if (!root.lockRequested || !root.fido2Active || root.fido2RetryBlocked) return
+      root.refreshFido2Token()
+      root.startFido2()
+    }
+  }
+
   // ---- bounds on external commands ----------------------------------------
   //
   // Every command below either talks to a USB device or to a system service
@@ -767,6 +846,7 @@ Item {
     stdout: StdioCollector { id: fido2DetectStdout; waitForEnd: true }
     onExited: {
       var present = String(fido2DetectStdout.text || "").trim() === "yes"
+      var wasPresent = root.fido2TokenPresent
 
       if (!present && root.fido2TokenPresent && !root.fido2AbsencePending) {
         root.fido2AbsencePending = true
@@ -789,11 +869,15 @@ Item {
 
       if (!root.locked || !root.fido2Configured) return
 
-      // Already on the key: pick the conversation up now that one is attached.
-      // Otherwise let settleAuthMode decide, which covers both a key present at
-      // lock time and one plugged in later.
+      // Start once when a key actually appears. Do not use every successful
+      // presence poll as an authentication retry: a failed PAM conversation
+      // may represent a real biometric or PIN failure, and retrying it every
+      // two seconds creates a failure storm. Explicit UI retries still call
+      // startFido2() directly.
       if (root.fido2Active) {
-        if (!root.fido2Authenticating) root.startFido2()
+        if (!root.fido2Authenticating && !root.fido2RetryBlocked && !wasPresent) {
+          root.scheduleFido2()
+        }
       } else {
         root.settleAuthMode()
       }
@@ -835,13 +919,20 @@ Item {
       // blank the freshly woken unlock screen under the user. Wall-clock time
       // exposes the gap: take a fresh run-up instead of blanking.
       if (Date.now() - armedAt > interval + 2000) {
+        // The settle timer handles a lid lock that slept before PAM began.
+        // This path is only for a conversation already awaiting the key.
+        if (root.fido2Authenticating) root.restartFido2AfterResume()
         root.armBlankTimer()
         return
       }
-      // Only a password check in flight should hold the display up. The
-      // fingerprint PAM stays armed for the whole lock, so gating on
-      // `authenticating` here would keep the panel lit until unlock.
-      if (root.lockRequested && !root.authenticatingPassword) root.runBlank()
+      // Fingerprint PAM stays armed for the whole lock, but password and FIDO
+      // transactions are bounded user interactions. Keep their prompts visible
+      // instead of blanking the display while the user is touching the key.
+      if (root.authenticatingPassword || root.fido2Authenticating) {
+        root.armBlankTimer()
+        return
+      }
+      if (root.lockRequested) root.runBlank()
     }
   }
 
