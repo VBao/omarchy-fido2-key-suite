@@ -226,6 +226,18 @@ check "removal still sees every credential, cap or no cap" bash -c '
   # mapping file from it, and a truncated list would delete the remainder.
   ! sed -n "/^credentials()/,/^}/p" "$1/bin/omarchy-fido2-suite" | grep -q "head -n"' _ "$REPO"
 
+# The version in the drift message came from $OMARCHY_PATH/version, a leftover
+# Omarchy itself no longer reads: the 4.0.3-1 package ships one saying
+# 4.0.0.alpha, so the message compared a constant with itself and named no
+# useful revision. `omarchy version` asks the package database instead.
+check "the installed version matches omarchy version" bash -c '
+  set -euo pipefail
+  command -v omarchy >/dev/null || exit 0
+  eval "$(sed -n "/^have()/p;/^installed_omarchy_version()/,/^}/p" "$1/bin/omarchy-fido2-suite")"
+  got=$(installed_omarchy_version)
+  want=$(omarchy version)
+  [[ $got == "$want" ]] || { echo "helper says $got, omarchy version says $want"; exit 1; }' _ "$REPO"
+
 printf '\n\e[1mUpstream\e[0m\n'
 
 if [[ ! -d $OMARCHY_LOCK_DIR ]]; then

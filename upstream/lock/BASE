@@ -5,7 +5,7 @@
 # Update both this file and the copies beside it in the same commit that
 # re-bases the fork -- they are one record, not two.
 
-omarchy_version=4.0.0.alpha
+omarchy_version=4.0.3-1
 upstream_branch=quattro
 upstream_commit=5b91db503c904bbfc5f34bdaaa9c708814958f3d
 forked_on=2026-09-09
