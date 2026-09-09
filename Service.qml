@@ -21,8 +21,18 @@ Item {
   // order the shell's own updateEntryInline writes in: once the bar widget is
   // on the bar, that layout entry is the plugin's entry, and settings written
   // from the panel land there. Looking in only one of the two would lose them.
+  //
+  // An installed third-party plugin is handed a capability-scoped shell API
+  // rather than the shell itself, and that API carries `barConfig` -- a copy
+  // of shellConfig.bar, reassigned on reload -- but never `shellConfig`. Hence
+  // the fallback: the bar layout is where this plugin's entry lives once the
+  // widget is on the bar, so the scoped copy answers the same question. Read
+  // shellConfig alone and settings are empty for every installed copy, and
+  // empty reads as "not asked for" -- lockOnUnplug and notifyOnKeyChange
+  // silently off however shell.json sets them.
   readonly property var settings: {
     var config = shell && shell.shellConfig ? shell.shellConfig : null
+    if (!config && shell && shell.barConfig) config = ({ bar: shell.barConfig })
     if (!config) return ({})
     var id = manifest && manifest.id ? String(manifest.id) : "erijl.lock"
 
@@ -57,15 +67,27 @@ Item {
   readonly property bool lockOnUnplug: settings.lockOnUnplug === true
   readonly property bool notifyOnKeyChange: settings.notifyOnKeyChange === true
   // Surfaces that show presence -- the bar widget, one instance per monitor --
-  // register while they are mounted. Counted rather than flagged so the last
-  // one leaving is what stops the watching.
-  property int presenceWatchers: 0
+  // ask for it over the IPC below, because an authentication service is not
+  // reachable as an object from a bar surface (see presence()). Interest is
+  // therefore a lease that lapses rather than a count that is decremented: a
+  // widget torn down with its monitor cannot give a watcher back, but it does
+  // stop asking, and silence is the same signal without the leak.
+  readonly property int presenceLeaseMs: 6000
+  property bool presenceRequested: false
 
-  function watchPresence(on) {
-    presenceWatchers = Math.max(0, presenceWatchers + (on ? 1 : -1))
+  function requestPresence() {
+    presenceRequested = true
+    presenceLease.restart()
   }
 
-  readonly property bool watchesPresence: lockOnUnplug || notifyOnKeyChange || presenceWatchers > 0
+  Timer {
+    id: presenceLease
+    interval: root.presenceLeaseMs
+    repeat: false
+    onTriggered: root.presenceRequested = false
+  }
+
+  readonly property bool watchesPresence: lockOnUnplug || notifyOnKeyChange || presenceRequested
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string stateHome: home + "/.local/state"
@@ -980,13 +1002,35 @@ Item {
         fido2Token: root.fido2TokenPresent,
         lockOnUnplug: root.lockOnUnplug,
         notifyOnKeyChange: root.notifyOnKeyChange,
-        presenceWatchers: root.presenceWatchers,
+        // 0 or 1: every mounted indicator renews one shared lease, so this
+        // answers "is anything watching" rather than counting heads. Kept
+        // under the old name because `doctor` reads it.
+        presenceWatchers: root.presenceRequested ? 1 : 0,
         authMode: root.authMode,
         authModeSettled: root.authModeSettled,
         defaultMode: root.defaultMode,
         authenticating: root.authenticating,
         lastEvent: root.lastEvent,
         lastEventAt: root.lastEventAt
+      })
+    }
+
+    // Presence for a bar indicator. Omarchy marks the built-in lock plugin
+    // `capabilities: ["authentication"]` and a clone inherits that, which
+    // keeps this service out of the registry `shell.serviceFor` reads -- so
+    // credential-bearing QML is unreachable from a bar surface, deliberately,
+    // and an indicator cannot hold this object to read a property off it.
+    // Asking here is how it registers interest instead: the call renews the
+    // presence lease, which is what starts fido2DetectTimer, and reads back
+    // the reading that timer maintains. The service still owns the polling --
+    // this never enumerates the bus itself -- so however many indicators are
+    // mounted there is still exactly one thing asking the key whether it is
+    // there, and nothing asks at all once they all stop calling.
+    function presence(): string {
+      if (root.fido2Configured) root.requestPresence()
+      return JSON.stringify({
+        fido2: root.fido2Configured,
+        fido2Token: root.fido2TokenPresent
       })
     }
 
