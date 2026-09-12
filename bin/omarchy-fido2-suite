@@ -297,6 +297,12 @@ pam_line() {
 
 pam_path() { echo "/etc/pam.d/$1"; }
 
+# Since pam 1.7 a service's stack may ship in /usr/lib/pam.d instead of
+# /etc/pam.d, and a file in /etc shadows the vendor copy entirely rather than
+# merging with it. polkit is shipped that way on Arch, so "no /etc/pam.d/polkit-1"
+# means "the stack lives in /usr/lib", not "this service has no PAM config".
+pam_vendor_path() { echo "/usr/lib/pam.d/$1"; }
+
 pam_module_path() {
   local dir
   for dir in /usr/lib/security /usr/lib64/security /lib/security /usr/lib/x86_64-linux-gnu/security; do
@@ -507,13 +513,22 @@ write_lock_service() {
 # is in it, so callers can report that rather than claim a wiring they did not
 # make.
 wire_system_pam() { # sudo and polkit; the lock service is written separately
-  local service file foreign line base new skipped=0
+  local service file vendor foreign line base new skipped=0
   for service in "${PAM_WIRED_SERVICES[@]}"; do
     file=$(pam_path "$service")
+    vendor=$(pam_vendor_path "$service")
+
+    if [[ ! -f $file && -f $vendor ]]; then
+      # The service has a vendor stack we are about to shadow. Seed from it so
+      # everything it pulls in -- pam_faillock's throttling above all -- survives
+      # our rule, instead of being silently dropped by a stack we invented.
+      install_root_file "$(insert_pam_line "$(cat "$vendor")" "$(pam_line "$service")")" "$file"
+      continue
+    fi
 
     if [[ ! -f $file ]]; then
-      # polkit-1 is absent on some installs; write the whole stack the way the
-      # stock setup script does.
+      # Genuinely no PAM config for this service, vendor or otherwise; write the
+      # whole stack the way the stock setup script does.
       install_root_file "$(
         cat <<EOF
 $(pam_marker)

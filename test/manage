@@ -22,6 +22,8 @@ label_file="$etc/fido2/tokens"
 sudo_pam="$etc/pam.d/sudo"
 polkit_pam="$etc/pam.d/polkit-1"
 lock_pam="$etc/pam.d/omarchy-lock-fido2"
+vendor_pam="$test_tmp/usr/lib/pam.d"
+vendor_polkit_pam="$vendor_pam/polkit-1"
 devices="$test_tmp/devices"
 key_info="$test_tmp/key-info"
 calls="$test_tmp/calls"
@@ -40,6 +42,7 @@ fail() {
 }
 
 sed -e "s|/etc/fido2|$etc/fido2|g" -e "s|/etc/pam.d|$etc/pam.d|g" \
+  -e "s|/usr/lib/pam.d|$vendor_pam|g" \
   "$REPO/bin/omarchy-fido2-suite" >"$suite"
 chmod +x "$suite"
 
@@ -793,6 +796,44 @@ run "" enable || true
 (( $(find "$etc/fido2/pam-backups" -name 'omarchy-lock-fido2.*' 2>/dev/null | wc -l) == 0 )) ||
   fail "an unchanged lock service is not rewritten" "$(ls "$etc/fido2/pam-backups" 2>&1)"
 pass "an unchanged lock service is left alone rather than rewritten"
+
+# --- a missing /etc/pam.d file may still have a vendor stack behind it -------
+#
+# Since pam 1.7 a service's stack may ship in /usr/lib/pam.d, and a file we
+# write in /etc shadows the vendor copy whole rather than merging with it.
+# polkit is shipped that way on Arch, so the absent-file branch is the normal
+# first-run path there, not an edge case. Fabricating a stack of bare
+# pam_unix.so rules silently dropped everything `include system-auth` pulls in
+# -- pam_faillock above all, leaving polkit an unthrottled password oracle.
+
+reset_state
+rm -rf "$vendor_pam"
+mkdir -p "$vendor_pam"
+printf '#%%PAM-1.0\n\nauth       include      system-auth\naccount    include      system-auth\npassword   include      system-auth\nsession    include      system-auth\n' \
+  >"$vendor_polkit_pam"
+enroll_one
+run "" enable || true
+
+grep -q 'pam_u2f.so' "$polkit_pam" ||
+  fail "a vendor-backed service still gets our rule" "$(cat "$polkit_pam")"
+(( $(grep -c 'include[[:space:]]*system-auth' "$polkit_pam") == 4 )) ||
+  fail "seeding from the vendor stack keeps all four include lines" "$(cat "$polkit_pam")"
+grep -qE '^auth[[:space:]]+required[[:space:]]+pam_unix\.so' "$polkit_pam" &&
+  fail "a vendor-backed service is never given a fabricated pam_unix stack" "$(cat "$polkit_pam")"
+pass "a service with a vendor stack is seeded from it, not replaced"
+
+# With genuinely nothing to inherit, the fabricated stack is still correct.
+
+reset_state
+rm -rf "$vendor_pam"
+enroll_one
+run "" enable || true
+
+grep -q 'pam_u2f.so' "$polkit_pam" ||
+  fail "a service with no stack anywhere still gets our rule" "$(cat "$polkit_pam")"
+grep -qE '^auth[[:space:]]+required[[:space:]]+pam_unix\.so' "$polkit_pam" ||
+  fail "a service with no stack anywhere falls back to the written stack" "$(cat "$polkit_pam")"
+pass "a service with no vendor stack still gets the fabricated one"
 
 # --- doctor reports every section it has ------------------------------------
 
