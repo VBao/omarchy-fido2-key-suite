@@ -43,8 +43,16 @@ fail() {
 
 sed -e "s|/etc/fido2|$etc/fido2|g" -e "s|/etc/pam.d|$etc/pam.d|g" \
   -e "s|/usr/lib/pam.d|$vendor_pam|g" \
+  -e "s|/usr/lib/security|$test_tmp/usr/lib/security|g" \
   "$REPO/bin/omarchy-fido2-suite" >"$suite"
 chmod +x "$suite"
+
+# pam_module_path looks for the module in the distribution's security
+# directory, which the sed above redirects into the sandbox. Without it the
+# tests that reach setup depend on pam-u2f being installed on the machine
+# running them.
+mkdir -p "$test_tmp/usr/lib/security"
+: >"$test_tmp/usr/lib/security/pam_u2f.so"
 
 cat >"$stub_bin/fido2-token" <<'SH'
 #!/bin/bash
