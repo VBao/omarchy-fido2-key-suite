@@ -123,12 +123,41 @@ check "the security-key glyph is not empty" bash -c '
   grep -A 10 "objectName: \"fido2Indicator\"" "$1/LockView.qml" \
     | grep -qE "^\s+text: \"[^\"]+\"$"' _ "$REPO"
 
+# Omarchy marks the built-in lock plugin `capabilities: ["authentication"]`,
+# and a clone inherits that through omarchy.clonedFrom -- which keeps the
+# service out of the registry shell.serviceFor reads, so credential-bearing QML
+# stays unreachable from a bar surface. A widget that reaches for the service
+# object therefore gets null however healthy the service is, and the glyph sits
+# dim for the rest of the session. This shipped once.
+check "the bar widget does not reach for the service object" bash -c '
+  ! grep -vE "^\s*//" "$1/BarWidget.qml" | grep -q "serviceFor"' _ "$REPO"
+
+check "the bar widget reads presence over the shell IPC" bash -c '
+  grep -q "omarchy-shell lock presence" "$1/BarWidget.qml" \
+    && grep -q "function presence(): string" "$1/Service.qml"' _ "$REPO"
+
 # Both presence settings are opt-in. A truthy test would turn lockOnUnplug on
 # for anyone who wrote "false" as a string, and locking someone's session is
 # not a thing to do by accident.
 check "presence settings are off unless set to exactly true" bash -c '
   grep -q "settings.lockOnUnplug === true" "$1/Service.qml" \
     && grep -q "settings.notifyOnKeyChange === true" "$1/Service.qml"' _ "$REPO"
+
+# An installed third-party plugin is handed a capability-scoped shell API that
+# carries barConfig but never shellConfig. Reading shellConfig alone leaves
+# settings empty for every installed copy -- and empty reads as "not asked
+# for", which turns both presence settings off however shell.json sets them.
+# This shipped once.
+check "settings survive the capability-scoped shell API" bash -c '
+  grep -q "shell.barConfig" "$1/Service.qml"' _ "$REPO"
+
+# Interest from a bar surface arrives as a repeated call rather than as a
+# matched pair, so it has to expire on its own: a widget torn down with its
+# monitor cannot give a watcher back, and a watch that never lapses leaves the
+# service enumerating the bus for the rest of the session.
+check "the presence lease lapses on its own" bash -c '
+  grep -q "presenceLease.restart()" "$1/Service.qml" \
+    && grep -A 5 "id: presenceLease" "$1/Service.qml" | grep -q "presenceRequested = false"' _ "$REPO"
 
 # An enrollment running in a terminal holds the key, so an enumeration can
 # come back empty while the key is still plugged in. Locking on that reading
@@ -163,7 +192,7 @@ check "every Text pins textFormat to PlainText" bash -c '
 # and every command that touches a key or a DBus service can stop answering.
 check "every collected command carries a deadline and a ceiling" bash -c '
   cd "$1" || exit 1
-  for file in Service.qml ManagementPanel.qml; do
+  for file in Service.qml ManagementPanel.qml BarWidget.qml; do
     collectors=$(grep -c "StdioCollector" "$file")
     (( collectors == 0 )) && continue
     grep -q "timeout -k" "$file" || { echo "$file collects output with no deadline"; exit 1; }
@@ -196,6 +225,18 @@ check "removal still sees every credential, cap or no cap" bash -c '
   # credentials() must stay uncapped: cmd_remove_credential rewrites the
   # mapping file from it, and a truncated list would delete the remainder.
   ! sed -n "/^credentials()/,/^}/p" "$1/bin/omarchy-fido2-suite" | grep -q "head -n"' _ "$REPO"
+
+# The version in the drift message came from $OMARCHY_PATH/version, a leftover
+# Omarchy itself no longer reads: the 4.0.3-1 package ships one saying
+# 4.0.0.alpha, so the message compared a constant with itself and named no
+# useful revision. `omarchy version` asks the package database instead.
+check "the installed version matches omarchy version" bash -c '
+  set -euo pipefail
+  command -v omarchy >/dev/null || exit 0
+  eval "$(sed -n "/^have()/p;/^installed_omarchy_version()/,/^}/p" "$1/bin/omarchy-fido2-suite")"
+  got=$(installed_omarchy_version)
+  want=$(omarchy version)
+  [[ $got == "$want" ]] || { echo "helper says $got, omarchy version says $want"; exit 1; }' _ "$REPO"
 
 printf '\n\e[1mUpstream\e[0m\n'
 

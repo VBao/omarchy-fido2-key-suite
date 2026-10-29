@@ -85,6 +85,23 @@ fail()    { printf '%somarchy-fido2-suite: %s%s\n' "$RED" "$1" "$RESET" >&2; exi
 interactive() { [[ -t 0 && -t 1 ]]; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# `omarchy version` is the source of truth: it reads the package database, and
+# knows about the omarchy-dev edge channel and dev checkouts. The version file
+# beside it is a leftover that Omarchy itself no longer reads -- the 4.0.3-1
+# package still ships one saying 4.0.0.alpha -- so taking the version from
+# there left the drift message comparing a constant with itself:
+#   Omarchy's lock plugin has moved ... (4.0.0.alpha -> 4.0.0.alpha)
+installed_omarchy_version() {
+  local version=""
+  if have omarchy; then
+    version=$(omarchy version 2>/dev/null || true)
+  fi
+  if [[ -z $version ]]; then
+    version=$(cat "${OMARCHY_PATH:-/usr/share/omarchy}/version" 2>/dev/null || true)
+  fi
+  printf '%s\n' "${version:-unknown}"
+}
+
 confirm() {
   (( ASSUME_YES )) && return 0
   if have gum; then
@@ -1362,9 +1379,8 @@ check_upstream() {
 
   local recorded_version
   recorded_version=$(grep -oP '^omarchy_version=\K.*' "$base" || echo "unknown")
-  local installed_version="unknown"
-  [[ -f "${OMARCHY_PATH:-/usr/share/omarchy}/version" ]] &&
-    installed_version=$(<"${OMARCHY_PATH:-/usr/share/omarchy}/version")
+  local installed_version
+  installed_version=$(installed_omarchy_version)
 
   if [[ ! -d $OMARCHY_LOCK_DIR ]]; then
     warn "$OMARCHY_LOCK_DIR not found; skipping the drift check"
@@ -1481,9 +1497,8 @@ cmd_rebase() {
     return 0
   fi
 
-  local version="unknown" commit="unknown"
-  [[ -f "${OMARCHY_PATH:-/usr/share/omarchy}/version" ]] &&
-    version=$(<"${OMARCHY_PATH:-/usr/share/omarchy}/version")
+  local version commit="unknown"
+  version=$(installed_omarchy_version)
   commit=$(git ls-remote https://github.com/basecamp/omarchy quattro 2>/dev/null | cut -f1 || true)
   [[ -n $commit ]] || commit="unknown (offline; taken from the installed package)"
 
