@@ -1,8 +1,12 @@
-# FIDO2 Security Key Suite
+# FIDO2 Security Key Suite (VBao fork)
 
 Omarchy's built-in _Setup > Security > Fido2_ covers `sudo` and system
 authorization prompts, not unlocking your computer. This plugin extends the key
 to the lock screen and to SSH, and adds a panel to manage it from the shell.
+
+This fork is based on [Erijl/omarchy-fido2-key-suite](https://github.com/Erijl/omarchy-fido2-key-suite)
+with the four open upstream PRs merged and the lock-screen fork rebased onto
+Omarchy 4.0.6. See [Fork changes](#fork-changes).
 
 <img src="preview.png" alt="The management panel" width="560">
 
@@ -26,7 +30,7 @@ through `pam_u2f`, including CTAP 2.1 keys that enforce `alwaysUv`.
 
 ```bash
 sudo pacman -S --needed pam-u2f libfido2
-omarchy plugin add https://github.com/Erijl/omarchy-fido2-key-suite.git --enable
+omarchy plugin add https://github.com/VBao/omarchy-fido2-key-suite.git --enable
 ~/.config/omarchy/plugins/erijl.lock/bin/omarchy-fido2-suite enroll
 omarchy restart shell
 ```
@@ -199,6 +203,22 @@ bin/omarchy-fido2-suite rebase   # merge onto the new built-in
 hot-reloads a plugin's entry point but keeps the compiled component for its
 other files, so an updated `LockView.qml` goes on drawing the old version — with
 a log line claiming it reloaded, and no error anywhere.
+
+## Fork changes
+
+This fork carries the upstream open PRs that were still unmerged:
+
+- Suspend-safe FIDO2 scheduling (`Keep FIDO authentication out of suspend`).
+- Presence over the capability-scoped shell IPC (`Reach presence over IPC`).
+- Vendor PAM stack inheritance, so polkit keeps `pam_faillock` and the rest of
+  `/usr/lib/pam.d/polkit-1` instead of a bare `pam_unix.so` stack
+  (`Inherit the vendor PAM stack`).
+- Inline settings read from `barConfig` for third-party installs, so
+  `defaultMode`, `lockOnUnplug`, and `notifyOnKeyChange` work as documented
+  (`Read inline settings from barConfig`).
+
+The lock-screen fork is rebased onto Omarchy 4.0.6, including
+`currentlyLocked()` so a lock requested just before suspend is not missed.
 
 ## License
 

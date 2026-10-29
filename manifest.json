@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "id": "erijl.lock",
-  "name": "FIDO2 Security Key Suite",
-  "version": "2.0.0",
-  "author": "Erijl",
+  "name": "FIDO2 Security Key Suite (VBao fork)",
+  "version": "2.0.1-vbao.1",
+  "author": "Erijl, VBao",
   "license": "MIT",
   "description": "Unlock the Omarchy lock screen, sudo and polkit with one or more FIDO2/U2F security keys (YubiKey, Token2, Nitrokey) through pam_u2f, with a panel and bar widget for enrolling and removing credentials, minting hardware-backed ed25519-sk SSH keys, and locking the session when the key is pulled out.",
   "kinds": [
