@@ -31,12 +31,19 @@ Item {
   // empty reads as "not asked for" -- lockOnUnplug and notifyOnKeyChange
   // silently off however shell.json sets them.
   readonly property var settings: {
+    // A third-party plugin is handed a scoped PluginShellApi, which carries
+    // barConfig (a copy of shellConfig.bar) and no shellConfig at all -- only
+    // a first-party plugin is handed the whole shell. Reading shellConfig
+    // alone therefore yielded {} here, and every inline setting read as unset:
+    // lockOnUnplug and notifyOnKeyChange silently off, defaultMode back to
+    // "auto". barConfig first, shellConfig kept as the first-party fallback.
     var config = shell && shell.shellConfig ? shell.shellConfig : null
-    if (!config && shell && shell.barConfig) config = ({ bar: shell.barConfig })
-    if (!config) return ({})
+    var barConfig = shell && shell.barConfig ? shell.barConfig : null
+    if (!config && !barConfig) return ({})
     var id = manifest && manifest.id ? String(manifest.id) : "erijl.lock"
 
-    var layout = config.bar && config.bar.layout ? config.bar.layout : null
+    var layout = barConfig && barConfig.layout ? barConfig.layout
+      : (config && config.bar && config.bar.layout ? config.bar.layout : null)
     var sections = ["left", "center", "right"]
     for (var s = 0; s < sections.length; s++) {
       var row = layout && Array.isArray(layout[sections[s]]) ? layout[sections[s]] : []
@@ -45,7 +52,7 @@ Item {
       }
     }
 
-    var entries = Array.isArray(config.plugins) ? config.plugins : []
+    var entries = config && Array.isArray(config.plugins) ? config.plugins : []
     for (var i = 0; i < entries.length; i++) {
       if (entries[i] && String(entries[i].id) === id) return entries[i]
     }
