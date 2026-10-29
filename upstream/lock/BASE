@@ -5,11 +5,11 @@
 # Update both this file and the copies beside it in the same commit that
 # re-bases the fork -- they are one record, not two.
 
-omarchy_version=4.0.3-1
+omarchy_version=4.0.6-1
 upstream_branch=quattro
-upstream_commit=5b91db503c904bbfc5f34bdaaa9c708814958f3d
-forked_on=2026-09-09
+upstream_commit=84782475aeb885c8d05f9e85b6ad0f1a0add60e5
+forked_on=2026-10-29
 
-sha256_Service.qml=3f0a265a09f7957e8f5d74666595d3136ec64899c414426190460f9e2098e701
-sha256_LockView.qml=9b174cf3ba8569dede528968be38994491ac73d9ca708f7e9451beeec7b4d066
+sha256_Service.qml=661ce2b70e6deadb293b0a7a2c2f19d10086ab191913ceb6d716bcc9b24fc7c4
+sha256_LockView.qml=8cfb7acbe062086ae90939f1e9b925ed2beac18e903b5e7f9d14a638d7cf5807
 sha256_manifest.json=58af8610a79045dfc09b541a5c2fdfd2e8886624549a49114ba424b4833cc546
