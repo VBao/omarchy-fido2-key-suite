@@ -55,6 +55,20 @@ suite did not write gets a diff and a question before it is replaced, and
 `disable` leaves it where it found it. Every edit to a PAM file is backed up to
 `/etc/fido2/pam-backups/` first.
 
+### Lock screen only
+
+`enroll` asks whether to protect `sudo` and polkit as well. Answering yes wires
+all three. To keep the key on the lock screen alone, run:
+
+```bash
+bin/omarchy-fido2-suite enable --lock-only
+```
+
+That writes the lock service and strips this suite's own rules from `sudo` and
+polkit, so both stay password-only. `disable --lock-only` is the reverse: it
+removes the lock service and leaves `sudo` and polkit as they are. Neither mode
+touches rules written by another tool.
+
 ## Use it
 
 - **Panel** — click the key glyph on the bar, or `omarchy-shell shell summon
@@ -71,6 +85,8 @@ suite did not write gets a diff and a question before it is replaced, and
 | `enroll [label]` | register a key (only one attached at a time) |
 | `list` / `remove [n]` | what is enrolled; drop one credential |
 | `enable` / `disable` | wire the key into `sudo` and polkit, or unwire it (`--adopt` to take over a `pam_u2f` rule written by something else) |
+| `enable --lock-only` | wire the lock screen and strip `sudo`/polkit instead |
+| `disable --lock-only` | remove the lock screen rule and leave `sudo`/polkit alone |
 | `ssh [name] [--resident]` | mint an SSH key held on the authenticator |
 | `repair` | fix an installation the stock Omarchy flow made |
 | `status` / `doctor` | where things stand; check every link in the chain |

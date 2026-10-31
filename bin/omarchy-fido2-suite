@@ -49,6 +49,7 @@ ASSUME_YES=0
 FORCE=0
 ADOPT=0
 RESIDENT=0
+LOCK_ONLY=0
 FAILURES=0
 
 # ------------------------------------------------------- bounds and deadlines
@@ -620,7 +621,7 @@ pam_foreign_removed() { # file service -> the file, minus the foreign pam_u2f ru
   ' "$file"
 }
 
-unwire_all_pam() {
+strip_system_pam() { # sudo and polkit only; the lock service is ours alone
   local service left=0
   for service in "${PAM_WIRED_SERVICES[@]}"; do
     strip_pam_line "$(pam_path "$service")" "$service"
@@ -629,6 +630,12 @@ unwire_all_pam() {
       warn "$(pam_path "$service") still has a pam_u2f rule this suite did not write; left as it is"
     fi
   done
+  return "$left"
+}
+
+unwire_all_pam() {
+  local left=0
+  strip_system_pam || left=1
   if [[ -f $PAM_SERVICE ]]; then
     if lock_service_is_ours; then
       backup_pam_file "$PAM_SERVICE"
@@ -869,6 +876,14 @@ cmd_setup() {
 cmd_enable() {
   (( $(credential_count) > 0 )) || fail "no keys enrolled -- run: $0 enroll"
   write_lock_service || warn "the lock screen cannot offer the key until $PAM_SERVICE is written"
+
+  if (( LOCK_ONLY )); then
+    strip_system_pam || true
+    ok "FIDO2 wired into the lock screen only"
+    note "sudo and polkit stay password-only"
+    return 0
+  fi
+
   if wire_system_pam; then
     ok "FIDO2 wired into sudo, polkit and the lock screen"
   else
@@ -878,6 +893,19 @@ cmd_enable() {
 }
 
 cmd_disable() {
+  if (( LOCK_ONLY )); then
+    if [[ -f $PAM_SERVICE ]] && lock_service_is_ours; then
+      backup_pam_file "$PAM_SERVICE"
+      sudo rm -f "$PAM_SERVICE"
+      ok "FIDO2 removed from the lock screen"
+    else
+      ok "the lock screen had no rule of ours to remove"
+    fi
+    note "sudo and polkit were not touched"
+    note "enrolled credentials are kept in $AUTHFILE"
+    return 0
+  fi
+
   if unwire_all_pam; then
     ok "FIDO2 removed from sudo, polkit and the lock screen"
   else
@@ -1543,6 +1571,8 @@ Wiring
                   (--adopt to take over a pam_u2f rule written by something
                   else, after showing it to you and asking)
   disable         remove this suite's PAM rules, keeping enrollments
+  enable --lock-only   wire the lock screen and strip sudo/polkit instead
+  disable --lock-only  remove the lock screen rule and leave sudo/polkit alone
   repair          fix an installation the stock Omarchy flow already made
 
 Health
@@ -1565,6 +1595,7 @@ while (( $# > 0 )); do
   --force) FORCE=1; shift ;;
   --adopt) ADOPT=1; shift ;;
   --resident) RESIDENT=1; shift ;;
+  --lock-only) LOCK_ONLY=1; shift ;;
   -h | --help) usage; exit 0 ;;
   *)
     [[ -n $command ]] || fail "unknown argument: $1"

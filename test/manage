@@ -843,6 +843,52 @@ grep -qE '^auth[[:space:]]+required[[:space:]]+pam_unix\.so' "$polkit_pam" ||
   fail "a service with no stack anywhere falls back to the written stack" "$(cat "$polkit_pam")"
 pass "a service with no vendor stack still gets the fabricated one"
 
+# --- --lock-only never reaches sudo or polkit --------------------------------
+#
+# Lock-screen-only used to be "disable, then setup", which is order-dependent:
+# disable last leaves nothing wired at all. It is now its own mode, and these
+# assert both the wiring and the restoring direction.
+
+reset_state
+enroll_one
+run "" enable -- --lock-only || true
+
+grep -q 'pam_u2f\.so' "$lock_pam" ||
+  fail "enable --lock-only writes the lock service" "$(cat "$output")"
+grep -q 'pam_u2f\.so' "$sudo_pam" &&
+  fail "enable --lock-only leaves sudo alone" "$(cat "$sudo_pam")"
+[[ -f $polkit_pam ]] && grep -q 'pam_u2f\.so' "$polkit_pam" &&
+  fail "enable --lock-only leaves polkit alone" "$(cat "$polkit_pam")"
+pass "enable --lock-only wires the lock screen and nothing else"
+
+# The interesting case: sudo and polkit were already wired by a full enable.
+reset_state
+enroll_one
+run "" enable || true
+grep -q 'pam_u2f\.so' "$sudo_pam" ||
+  fail "the full enable still wires sudo" "$(cat "$sudo_pam")"
+
+run "" enable -- --lock-only || true
+
+grep -q 'pam_u2f\.so' "$sudo_pam" &&
+  fail "enable --lock-only strips an existing sudo rule" "$(cat "$sudo_pam")"
+grep -q 'pam_u2f\.so' "$lock_pam" ||
+  fail "enable --lock-only keeps the lock service" "$(cat "$lock_pam")"
+pass "enable --lock-only removes sudo and polkit wiring it finds"
+
+# disable --lock-only is the way back out without touching the other two.
+reset_state
+enroll_one
+run "" enable || true
+
+run "" disable -- --lock-only || true
+
+[[ -f $lock_pam ]] &&
+  fail "disable --lock-only removes the lock service" "$(cat "$lock_pam")"
+grep -q 'pam_u2f\.so' "$sudo_pam" ||
+  fail "disable --lock-only leaves sudo wired" "$(cat "$sudo_pam")"
+pass "disable --lock-only removes only the lock service"
+
 # --- doctor reports every section it has ------------------------------------
 
 # A check whose last line was a plain `[[ ... ]] && warn ...` returned non-zero
