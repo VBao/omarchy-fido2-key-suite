@@ -875,10 +875,15 @@ cmd_setup() {
 
 cmd_enable() {
   (( $(credential_count) > 0 )) || fail "no keys enrolled -- run: $0 enroll"
-  write_lock_service || warn "the lock screen cannot offer the key until $PAM_SERVICE is written"
+
+  if ! write_lock_service; then
+    fail "the lock screen cannot offer the key until $PAM_SERVICE is written -- nothing was changed"
+  fi
 
   if (( LOCK_ONLY )); then
-    strip_system_pam || true
+    if ! strip_system_pam; then
+      warn "the lock service is wired, but a pam_u2f rule this suite did not write is still in sudo or polkit (see above)"
+    fi
     ok "FIDO2 wired into the lock screen only"
     note "sudo and polkit stay password-only"
     return 0
